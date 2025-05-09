@@ -16,7 +16,6 @@ import requests
 class LocalDBManager:
     def __init__(self):
         self.db_file = "resources.json"
-        # Create the file if it doesn't exist
         if not os.path.exists(self.db_file):
             with open(self.db_file, 'w') as f:
                 json.dump([], f)
@@ -47,10 +46,8 @@ class LocalDBManager:
 
 class FacebookAutoShare:
     def __init__(self):
-        with open("config.json") as f:
-            config = json.load(f)
-            self.version = config["VERSION"]
-            self.dev = config["DEV"]
+        self.version = '1.0.1'
+        self.dev = 'CYZSH'
         self.console = Console()
         self.api_version = 'v22.0'
         self.user_agents = self._generate_user_agents()
@@ -75,10 +72,7 @@ class FacebookAutoShare:
     @staticmethod
     def get_headers(cookie: str = None) -> Dict:
         headers = {
-            "User-Agent": random.choice([
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1"
-            ]),
+            "User-Agent": self.user_agent,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.5",
             "Connection": "keep-alive",
@@ -104,12 +98,12 @@ class FacebookAutoShare:
 
     def show_banner(self):
         banner = r"""
-███████╗███████╗██╗  ██╗ █████╗ ██████╗ ███████╗
-██╔════╝██╔════╝██║  ██║██╔══██╗██╔══██╗██╔════╝
-█████╗  ███████╗███████║███████║██████╔╝█████╗  
-██╔══╝  ╚════██║██╔══██║██╔══██║██╔══██╗██╔══╝  
-██║     ███████║██║  ██║██║  ██║██║  ██║███████╗
-╚═╝     ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝
+ ██████╗██╗   ██╗███████╗███████╗██╗  ██╗
+██╔════╝╚██╗ ██╔╝╚══███╔╝██╔════╝██║  ██║
+██║      ╚████╔╝   ███╔╝ ███████╗███████║
+██║       ╚██╔╝   ███╔╝  ╚════██║██╔══██║
+╚██████╗   ██║   ███████╗███████║██║  ██║
+ ╚═════╝   ╚═╝   ╚══════╝╚══════╝╚═╝  ╚═╝
         """
         menu_modes = {
             'main': 'Main Menu',
@@ -122,10 +116,11 @@ class FacebookAutoShare:
 [›] Tool: FB Spam Share
 [›] Version: {self.version}
 [›] Dev: {self.dev}
+[›] Status: Active
 [›] Panel: {current_mode}
         """
-        self.print_panel('CYZSH', banner, "violet")
-        self.print_panel('Info', info, "violet")
+        self.print_panel('', banner, "violet")
+        self.print_panel('INFO', info, "violet")
 
     def show_main_menu(self):
         self.current_menu = "main"
