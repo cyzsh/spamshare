@@ -5,13 +5,16 @@ import aiohttp
 import re
 import os
 import json
+import string
+import uuid
+import requests
+import urllib.parse
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
 from rich.table import Table
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Optional, Tuple, Union
-import requests
 
 class LocalDBManager:
     def __init__(self):
@@ -22,7 +25,7 @@ class LocalDBManager:
     
     def _save_resources(self, resources: List) -> None:
         with open(self.db_file, 'w') as f:
-            json.dump(resources, f)
+            json.dump(resources, f, indent=2)
     
     def get_resources(self) -> List:
         with open(self.db_file, 'r') as f:
@@ -44,6 +47,241 @@ class LocalDBManager:
             return True
         return False
 
+class FacebookTokenGetter:
+    def __init__(self):
+        self.useragent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1"
+        self.endpoints = {
+            "b_graph": "https://b-graph.facebook.com",
+            "key": "https://b-api.facebook.com",
+            "business": "https://business.facebook.com",
+            "auth": "https://b-api.facebook.com/method/auth.login"
+        }
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': self.useragent,
+            'Accept-Language': 'en_US'
+        })
+        self.request_timeout = 30
+
+    def fetch_cookies(self, email: str, password: str) -> Dict:
+        """Fetch Facebook cookies using email and password"""
+        try:
+            params = {
+                'adid': str(uuid.uuid4()),
+                'email': email,
+                'password': password,
+                'format': 'json',
+                'device_id': str(uuid.uuid4()),
+                'cpl': 'true',
+                'family_device_id': str(uuid.uuid4()),
+                'locale': 'en_US',
+                'client_country_code': 'US',
+                'credentials_type': 'device_based_login_password',
+                'generate_session_cookies': '1',
+                'generate_analytics_claim': '1',
+                'generate_machine_id': '1',
+                'currently_logged_in_userid': '0',
+                'irisSeqID': '1',
+                'try_num': '1',
+                'enroll_misauth': 'false',
+                'meta_inf_fbmeta': 'NO_FILE',
+                'source': 'login',
+                'machine_id': ''.join(random.choices(string.ascii_letters + string.digits, k=22)),
+                'fb_api_req_friendly_name': 'authenticate',
+                'fb_api_caller_class': 'com.facebook.account.login.protocol.Fb4aAuthHandler',
+                'api_key': '882a8490361da98702bf97a021ddc14d',
+                'access_token': '350685531728|62f8ce9f74b12f84c123cc23437a4a32'
+            }
+            
+            full_url = self.endpoints['auth'] + "?" + urllib.parse.urlencode(params)
+            response = self.session.get(full_url, timeout=self.request_timeout)
+            response.raise_for_status()
+            data = response.json()
+            
+            if 'session_cookies' in data:
+                cookies = "; ".join(
+                    f"{cookie['name']}={cookie['value']}"
+                    for cookie in data['session_cookies']
+                )
+                return {
+                    "cookies": cookies,
+                    "status": "success",
+                    "message": "Cookies obtained successfully"
+                }
+            else:
+                error_msg = data.get('error_msg', data.get('error', {}).get('message', 'Unknown error'))
+                return {
+                    "status": "error",
+                    "message": f"Failed to get cookies: {error_msg}"
+                }
+                
+        except requests.exceptions.Timeout:
+            return {
+                "status": "error",
+                "message": "Login request timed out"
+            }
+        except requests.exceptions.RequestException as e:
+            return {
+                "status": "error",
+                "message": f"Network error during login: {str(e)}"
+            }
+        except json.JSONDecodeError:
+            return {
+                "status": "error",
+                "message": "Invalid response from login server"
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Unexpected error: {str(e)}"
+            }
+
+    def get_eaaau_token(self, email: str, password: str) -> Dict:
+        try:
+            headers = {
+                'authorization': 'OAuth 350685531728|62f8ce9f74b12f84c123cc23437a4a32',
+                'x-fb-friendly-name': 'Authenticate',
+                'x-fb-connection-type': 'Unknown',
+                'accept-encoding': 'gzip, deflate',
+                'content-type': 'application/x-www-form-urlencoded',
+                'x-fb-http-engine': 'Liger'
+            }
+            data = {
+                'adid': ''.join(random.choices(string.hexdigits, k=16)),
+                'format': 'json',
+                'device_id': str(uuid.uuid4()),
+                'email': email,
+                'password': password,
+                'generate_analytics_claims': '0',
+                'credentials_type': 'password',
+                'source': 'login',
+                'error_detail_type': 'button_with_disabled',
+                'enroll_misauth': 'false',
+                'generate_session_cookies': '1',
+                'generate_machine_id': '0',
+                'fb_api_req_friendly_name': 'authenticate',
+            }
+            
+            response = self.session.post(
+                f"{self.endpoints['b_graph']}/auth/login",
+                headers=headers,
+                data=data
+            ).json()
+            
+            if 'session_key' in response:
+                cookies = "; ".join(
+                    f"{cookie['name']}={cookie['value']}" 
+                    for cookie in response.get('session_cookies', [])
+                )
+                return {
+                    "token": response["access_token"].strip(),
+                    "cookies": cookies,
+                    "status": "success"
+                }
+            else:
+                error = response.get('error', {})
+                return {
+                    "status": "error",
+                    "message": error.get('message', 'Unknown error')
+                }
+                
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": str(e)
+            }
+
+    def get_eaad6v7_token(self, eaaau_token: str) -> Dict:
+        try:
+            url = f"{self.endpoints['key']}/method/auth.getSessionforApp?format=json&access_token={eaaau_token.strip()}&new_app_id=275254692598279"
+            response = self.session.get(url).json()
+            
+            if 'access_token' in response:
+                return {
+                    "token": response["access_token"].strip(),
+                    "status": "success"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": response.get('error', {}).get('message', 'Failed to get EAAD6V7 token')
+                }
+                
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": str(e)
+            }
+
+    def get_eaag_token(self, cookies: str) -> Dict:
+        try:
+            headers = {
+                'authority': 'business.facebook.com',
+                'cookie': cookies,
+                'referer': 'https://www.facebook.com/',
+                'user-agent': self.useragent
+            }
+            
+            response = self.session.get(
+                'https://business.facebook.com/content_management',
+                headers=headers,
+                timeout=self.request_timeout
+            )
+            
+            if 'EAAG' in response.text:
+                token = response.text.split('EAAG')[1].split('","')[0]
+                return {
+                    "token": f"EAAG{token}".strip(),
+                    "status": "success"
+                }
+            return {
+                "status": "error",
+                "message": "EAAG token not found"
+            }
+            
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": str(e)
+            }
+
+    def get_all_tokens(self, email: str, password: str) -> Dict:
+        """Get all tokens (cookies, EAAAAU, EAAD6V7, EAAG) in one call"""
+        result = {
+            "status": "success",
+            "cookies": None,
+            "eaaau": None,
+            "eaad6v7": None,
+            "eaag": None,
+            "errors": []
+        }
+        
+        # First get cookies and EAAAAU token
+        eaaau_result = self.get_eaaau_token(email, password)
+        if eaaau_result.get("status") != "success":
+            result["status"] = "error"
+            result["errors"].append(f"EAAAAU: {eaaau_result.get('message', 'Unknown error')}")
+            return result
+        
+        result["cookies"] = eaaau_result["cookies"]
+        result["eaaau"] = eaaau_result["token"]
+        
+        # Get EAAD6V7 token
+        eaad6v7_result = self.get_eaad6v7_token(eaaau_result["token"])
+        if eaad6v7_result.get("status") == "success":
+            result["eaad6v7"] = eaad6v7_result["token"]
+        else:
+            result["errors"].append(f"EAAD6V7: {eaad6v7_result.get('message', 'Unknown error')}")
+        
+        # Get EAAG token from cookies
+        eaag_result = self.get_eaag_token(eaaau_result["cookies"])
+        if eaag_result.get("status") == "success":
+            result["eaag"] = eaag_result["token"]
+        else:
+            result["errors"].append(f"EAAG: {eaag_result.get('message', 'Unknown error')}")
+        
+        return result
+
 class FacebookAutoShare:
     def __init__(self):
         self.version = '1.0.1'
@@ -62,6 +300,7 @@ class FacebookAutoShare:
         self.interval = 0
         self.REQUEST_TIMEOUT = 30
         self.current_menu = "main"
+        self.token_getter = FacebookTokenGetter()
 
     def _generate_user_agents(self):
         return [
@@ -72,7 +311,10 @@ class FacebookAutoShare:
     @staticmethod
     def get_headers(cookie: str = None) -> Dict:
         headers = {
-            "User-Agent": self.user_agent,
+            "User-Agent": random.choice([
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1"
+            ]),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.5",
             "Connection": "keep-alive",
@@ -108,7 +350,8 @@ class FacebookAutoShare:
         menu_modes = {
             'main': 'Main Menu',
             'share': 'Spam Share',
-            'resources': 'Resource Management'
+            'resources': 'Resource Management',
+            'token_gen': 'Token Generator'
         }
         current_mode = menu_modes.get(self.current_menu, 'Main Menu')
         
@@ -130,7 +373,8 @@ class FacebookAutoShare:
             "Main Menu",
             "[1] Initialize Spamshare\n"
             "[2] Manage Resources\n"
-            "[3] Exit",
+            "[3] Token Generator\n"
+            "[4] Exit",
             "blue"
         )
 
@@ -154,7 +398,6 @@ class FacebookAutoShare:
         
         resources = self.db.get_resources()
         
-        # Create table
         table = Table(
             title=f"[bold magenta]Resources[/] (Testing {len(resources)} entries...)",
             show_header=True,
@@ -168,7 +411,6 @@ class FacebookAutoShare:
         table.add_column("Status", width=12)
         table.add_column("Details", width=16)
     
-        # Test each resource
         tested_resources = []
         with Progress(transient=True) as progress:
             task = progress.add_task("Validating...", total=len(resources))
@@ -179,7 +421,6 @@ class FacebookAutoShare:
                 
                 if isinstance(resource, dict):
                     if 'cookie' in resource:
-                        # Test cookie
                         token = self.get_token_from_cookie(resource['cookie'])
                         if token:
                             test_result = await self.verify_token(token)
@@ -197,7 +438,6 @@ class FacebookAutoShare:
                         })
                         
                     elif 'token' in resource:
-                        # Test token directly
                         test_result = await self.verify_token(resource['token'])
                         if test_result['valid']:
                             status = "[green]✓ LIVE[/]"
@@ -214,9 +454,8 @@ class FacebookAutoShare:
                         })
                 
                 progress.update(task, advance=1)
-                await asyncio.sleep(0.1)  # Prevent rate limiting
+                await asyncio.sleep(0.1)
     
-        # Build table with verified results
         for idx, res in enumerate(tested_resources):
             content_preview = (res['content'][:7] + '...') if len(res['content']) > 19 else res['content']
             table.add_row(
@@ -233,6 +472,146 @@ class FacebookAutoShare:
             "[1] Add  [2] Remove  [3] Test All  [0] Back",
             "blue"
         )
+
+    async def show_token_generator(self):
+        self.current_menu = "token_gen"
+        self.clear_screen()
+        self.show_banner()
+        
+        self.print_panel(
+            "Token Generator",
+            "[1] Get Tokens+Cookies\n"
+            "[2] Get Cookies Only\n"
+            "[3] Get EAAG Token from Cookies\n"
+            "[0] Back to Main",
+            "blue"
+        )
+        
+        choice = input("\n[›] Select: ")
+        
+        if choice == "0":
+            self.current_menu = "main"
+        elif choice == "1":
+            await self.get_all_tokens()
+        elif choice == "2":
+            await self.get_cookies_only()
+        elif choice == "3":
+            await self.get_eaag_from_cookies()
+        else:
+            self.print_panel("Error", "Invalid choice", "red")
+            time.sleep(1)
+
+    async def get_all_tokens(self):
+        self.clear_screen()
+        self.show_banner()
+        
+        email = input("[›] Email/Username: ")
+        password = input("[›] Password: ")
+        
+        self.loading(3, "Authenticating")
+        
+        result = self.token_getter.get_all_tokens(email, password)
+        
+        self.clear_screen()
+        self.show_banner()
+        
+        if result["status"] == "error":
+            self.print_panel("Error", result["errors"][0], "red")
+            input("\n[Press Enter to continue]")
+            await self.show_token_generator()
+        
+        table = Table(title="Generated Tokens", show_header=True, header_style="bold magenta")
+        table.add_column("Token Type", style="cyan")
+        table.add_column("Value", style="green")
+        
+        table.add_row("Cookies", result["cookies"])
+        table.add_row("EAAAAU Token", result["eaaau"])
+        
+        if result["eaad6v7"]:
+            table.add_row("EAAD6V7 Token", result["eaad6v7"])
+        else:
+            table.add_row("EAAD6V7 Token", "[red]Failed to get[/red]")
+            
+        if result["eaag"]:
+            table.add_row("EAAG Token", result["eaag"])
+        else:
+            table.add_row("EAAG Token", "[red]Failed to get[/red]")
+        
+        self.console.print(table)
+        
+        if result["errors"]:
+            self.print_panel("Partial Errors", "\n".join(result["errors"]), "yellow")
+        
+        # Ask to save to resources
+        save = input("\n[›] Save to resources? (y/n): ").lower()
+        if save == 'y':
+            if result["cookies"]:
+                self.db.add_resource({"cookie": result["cookies"]})
+            if result["eaaau"]:
+                self.db.add_resource({"token": result["eaaau"]})
+            if result["eaad6v7"]:
+                self.db.add_resource({"token": result["eaad6v7"]})
+            if result["eaag"]:
+                self.db.add_resource({"token": result["eaag"]})
+            self.print_panel("Success", "Tokens saved to resources!", "green")
+        
+        input("\n[Press Enter to continue]")
+        await self.show_token_generator()
+
+    async def get_cookies_only(self):
+        self.clear_screen()
+        self.show_banner()
+        
+        email = input("[›] Email/Username: ")
+        password = input("[›] Password: ")
+        
+        self.loading(3, "Fetching Cookies")
+        
+        result = self.token_getter.fetch_cookies(email, password)
+        
+        self.clear_screen()
+        self.show_banner()
+        
+        if result["status"] == "error":
+            self.print_panel("Error", result["message"], "red")
+        else:
+            self.print_panel("Success", "Cookies obtained successfully!", "green")
+            self.print_panel("Cookies", result["cookies"], "blue")
+            
+            save = input("\n[›] Save to resources? (y/n): ").lower()
+            if save == 'y':
+                self.db.add_resource({"cookie": result["cookies"]})
+                self.print_panel("Success", "Cookies saved to resources!", "green")
+        
+        input("\n[Press Enter to continue]")
+        await self.show_token_generator()
+
+    async def get_eaag_from_cookies(self):
+        self.clear_screen()
+        self.show_banner()
+        
+        cookies = input("[›] Enter cookies: ")
+        
+        self.loading(3, "Extracting EAAG Token")
+        
+        result = self.token_getter.get_eaag_token(cookies)
+        
+        self.clear_screen()
+        self.show_banner()
+        
+        if result["status"] == "error":
+            self.print_panel("Error", result["message"], "red")
+        else:
+            self.print_panel("Success", "EAAG Token retrieved successfully!", "green")
+            self.print_panel("EAAG Token", result["token"], "blue")
+            
+            save = input("\n[›] Save to resources? (y/n): ").lower()
+            if save == 'y':
+                self.db.add_resource({"token": result["token"]})
+                self.print_panel("Success", "Token saved to resources!", "green")
+        
+        input("\n[Press Enter to continue]")
+        await self.show_token_generator()
 
     async def create_session(self):
         if self.session is None or self.session.closed:
@@ -444,6 +823,8 @@ class FacebookAutoShare:
                 elif choice == "2":
                     await self.manage_resources()
                 elif choice == "3":
+                    await self.show_token_generator()
+                elif choice == "4":
                     break
                 
             elif self.current_menu == "share":
@@ -462,6 +843,9 @@ class FacebookAutoShare:
                 else:
                     self.print_panel("Error", "Invalid choice", "red")
                     time.sleep(1)
+
+            elif self.current_menu == "resources":
+                await self.manage_resources()
 
     async def manage_resources(self):
         while True:
